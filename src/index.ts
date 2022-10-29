@@ -1,6 +1,6 @@
 import { base64UrlDecode, base64UrlEncode } from './codec'
 
-export type LocalSecretStateSyncConfig<StateType> = {
+export type LocalStateSyncConfig<StateType> = {
   encryptionKey: string
   onStateUpdated: (newState: StateType) => unknown
   stateParser?: Parser<StateType>
@@ -20,16 +20,13 @@ type LoadedInternalState = {
 }
 type InternalState = IdleInternalState | LoadedInternalState
 
-export class LocalSecretStateSync<StateType> {
+export class LocalStateSync<StateType> {
   #internalState: InternalState
   private config: Required<
-    Omit<LocalSecretStateSyncConfig<StateType>, 'encryptionKey'>
+    Omit<LocalStateSyncConfig<StateType>, 'encryptionKey'>
   >
 
-  constructor({
-    encryptionKey,
-    ...config
-  }: LocalSecretStateSyncConfig<StateType>) {
+  constructor({ encryptionKey, ...config }: LocalStateSyncConfig<StateType>) {
     this.#internalState = {
       state: 'idle'
     }
@@ -43,11 +40,11 @@ export class LocalSecretStateSync<StateType> {
 
   public async setState(state: StateType) {
     if (typeof window === 'undefined') {
-      console.warn('LocalSecretStateSync is disabled in Node.js')
+      console.warn('LocalStateSync is disabled in Node.js')
       return
     }
     if (this.#internalState.state !== 'loaded') {
-      throw new Error('LocalSecretStateSync is not ready')
+      throw new Error('LocalStateSync is not ready')
     }
     const encryptedState = await this.encryptState(state)
     window.localStorage.setItem(this.#internalState.storageKey, encryptedState)
@@ -55,25 +52,25 @@ export class LocalSecretStateSync<StateType> {
 
   public clearState() {
     if (typeof window === 'undefined') {
-      console.warn('LocalSecretStateSync is disabled in Node.js')
+      console.warn('LocalStateSync is disabled in Node.js')
       return
     }
     if (this.#internalState.state !== 'loaded') {
-      throw new Error('LocalSecretStateSync is not ready')
+      throw new Error('LocalStateSync is not ready')
     }
     window.localStorage.removeItem(this.#internalState.storageKey)
   }
 
   private async setup(encodedEncryptionKey: string) {
+    if (typeof window === 'undefined') {
+      console.warn('LocalStateSync is disabled in Node.js')
+      return
+    }
     const keyBuffer = base64UrlDecode(encodedEncryptionKey)
     if (keyBuffer.byteLength !== 32) {
       throw new Error(
-        'LocalSecretStateSync: encryptionKey must be 32 bytes (48 base64url characters)'
+        'LocalStateSync: encryptionKey must be 32 bytes (48 base64url characters)'
       )
-    }
-    if (typeof window === 'undefined') {
-      console.warn('LocalSecretStateSync is disabled in Node.js')
-      return
     }
     const encryptionKey = await window.crypto.subtle.importKey(
       'raw',
@@ -127,7 +124,7 @@ export class LocalSecretStateSync<StateType> {
 
   private async decryptState(storageValue: string) {
     if (this.#internalState.state !== 'loaded') {
-      throw new Error('LocalSecretStateSync is not ready')
+      throw new Error('LocalStateSync is not ready')
     }
     const [iv, ciphertext] = storageValue.split('.')
     const cleartext = await window.crypto.subtle.decrypt(
@@ -144,7 +141,7 @@ export class LocalSecretStateSync<StateType> {
 
   private async encryptState(state: StateType) {
     if (this.#internalState.state !== 'loaded') {
-      throw new Error('LocalSecretStateSync is not ready')
+      throw new Error('LocalStateSync is not ready')
     }
     const serializedState = this.config.stateSerializer(state)
     const iv = window.crypto.getRandomValues(new Uint8Array(12))
