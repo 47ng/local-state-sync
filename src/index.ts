@@ -1,4 +1,5 @@
 import { base64UrlDecode, base64UrlEncode } from './codec'
+export { base64UrlDecode, base64UrlEncode } // for convenience
 
 export type LocalStateSyncConfig<StateType> = {
   encryptionKey: string
