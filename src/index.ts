@@ -2,6 +2,7 @@ import { base64UrlDecode, base64UrlEncode } from './codec'
 
 export type LocalStateSyncConfig<StateType> = {
   encryptionKey: string
+  namespace?: string
   onStateUpdated: (newState: StateType) => unknown
   stateParser?: Parser<StateType>
   stateSerializer?: Serializer<StateType>
@@ -32,6 +33,7 @@ export class LocalStateSync<StateType> {
     }
     this.config = {
       ...config,
+      namespace: config.namespace ?? 'default',
       stateParser: config.stateParser ?? JSON.parse,
       stateSerializer: config.stateSerializer ?? JSON.stringify
     }
@@ -66,12 +68,14 @@ export class LocalStateSync<StateType> {
       console.warn('LocalStateSync is disabled in Node.js')
       return
     }
-    const keyBuffer = base64UrlDecode(encodedEncryptionKey)
-    if (keyBuffer.byteLength !== 32) {
+    const baseKey = base64UrlDecode(encodedEncryptionKey)
+    if (baseKey.byteLength !== 32) {
       throw new Error(
         'LocalStateSync: encryptionKey must be 32 bytes (48 base64url characters)'
       )
     }
+    const namespace = new TextEncoder().encode(this.config.namespace)
+    const keyBuffer = await hash(concat(baseKey, namespace))
     const encryptionKey = await window.crypto.subtle.importKey(
       'raw',
       keyBuffer,
@@ -82,9 +86,7 @@ export class LocalStateSync<StateType> {
       false,
       ['encrypt', 'decrypt']
     )
-    const storageKey = base64UrlEncode(
-      new Uint8Array(await window.crypto.subtle.digest('SHA-256', keyBuffer))
-    )
+    const storageKey = base64UrlEncode(await hash(keyBuffer))
     this.#internalState = {
       state: 'loaded',
       storageKey,
@@ -158,4 +160,22 @@ export class LocalStateSync<StateType> {
       base64UrlEncode(new Uint8Array(ciphertext))
     ].join('.')
   }
+}
+
+// --
+
+/**
+ * SHA-512 truncated to the first 256 bits of output
+ * (note: different from SHA-512/256)
+ */
+async function hash(input: Uint8Array) {
+  const sha512 = await window.crypto.subtle.digest('SHA-512', input)
+  return new Uint8Array(sha512.slice(0, 32))
+}
+
+function concat(a: Uint8Array, b: Uint8Array) {
+  const c = new Uint8Array(a.byteLength + b.byteLength)
+  c.set(a)
+  c.set(b, a.byteLength)
+  return c
 }

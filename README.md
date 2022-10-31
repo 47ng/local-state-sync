@@ -101,6 +101,27 @@ new LocalStateSync<MyState>({
 })
 ```
 
+## Namespacing
+
+If you want to use multiple states in parallel, you can provide an optional
+`namespace` argument:
+
+```ts
+new LocalStateSync({
+  // ...
+  namespace: `${userID}:ui-preferences`
+})
+
+new LocalStateSync({
+  // ...
+  namespace: `${userID}:secret-store`
+})
+```
+
+You could also provide different encryption keys to get the same effect, but
+namespaces allow you to add some variance with fewer constraints on the key
+size and format.
+
 ## Examples
 
 ### React
@@ -152,4 +173,15 @@ The IV and ciphertext are base64url encoded, and joined together using a dot `.`
 [ iv (12 bytes)].[ ciphertext                             ]
 ```
 
-The storage key is the SHA-256 hash of the encryption key in base64url.
+The final encryption key is derived from the provided base encryption key and
+the namespace (set to `'default'` if unspecified).
+The storage key is then derived from the encryption key:
+
+```
+encryption key = SHA-512(base key || namespace)[0:31]
+storage key = base64Encode(SHA-512(encryption key)[0:31])
+
+Legend:
+x || y  -> concatenation
+[x:y]   -> slice
+```
