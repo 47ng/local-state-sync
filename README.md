@@ -122,6 +122,34 @@ You could also provide different encryption keys to get the same effect, but
 namespaces allow you to add some variance with fewer constraints on the key
 size and format.
 
+## State expiration
+
+By default, the state will be persisted indefinitely.
+
+To allow it to expire after a given time, you can pass a global value in the
+constructor arguments, or a custom value when setting the state:
+
+```ts
+const lss = new LocalStateSync({
+  defaultTTL: 7 * 24 * 60 * 60 * 1000 // 7 days
+})
+
+lss.setState(
+  {
+    name: 'Here to stay',
+    age: 9001
+  },
+  {
+    ttl: 0 // does not expire
+  }
+)
+```
+
+A zero or negative TTL value will persist the state indefinitely.
+
+Note that this does not constitute a fixed point in time. Everytime the state
+is set, its TTL is updated and pushed forward into the future.
+
 ## Examples
 
 ### React

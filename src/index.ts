@@ -7,6 +7,11 @@ export type LocalStateSyncConfig<StateType> = {
   onStateUpdated: (newState: StateType) => unknown
   stateParser?: Parser<StateType>
   stateSerializer?: Serializer<StateType>
+
+  /**
+   * How long to persist the state for. Defaults to 0, which means indefinitely.
+   */
+  defaultTTL?: number
 }
 
 type Parser<T> = (input: string) => T
@@ -22,26 +27,43 @@ type LoadedInternalState = {
 }
 type InternalState = IdleInternalState | LoadedInternalState
 
+type SetStateOptions = {
+  /**
+   * How long to persist the state for.
+   * Uses the global setting `defaultTTL` if unspecified.
+   * Set to 0 to persist the state indefinitely.
+   */
+  ttl?: number
+}
+
 export class LocalStateSync<StateType> {
   #internalState: InternalState
   private config: Required<
     Omit<LocalStateSyncConfig<StateType>, 'encryptionKey'>
   >
+  private encoder: TextEncoder
+  private decoder: TextDecoder
 
   constructor({ encryptionKey, ...config }: LocalStateSyncConfig<StateType>) {
     this.#internalState = {
       state: 'idle'
     }
     this.config = {
-      ...config,
+      defaultTTL: config.defaultTTL ?? 0,
       namespace: config.namespace ?? 'default',
+      onStateUpdated: config.onStateUpdated,
       stateParser: config.stateParser ?? JSON.parse,
       stateSerializer: config.stateSerializer ?? JSON.stringify
     }
+    this.encoder = new TextEncoder()
+    this.decoder = new TextDecoder()
     this.setup(encryptionKey).then(this.loadFromLocalStorage.bind(this))
   }
 
-  public async setState(state: StateType) {
+  public async setState(
+    state: StateType,
+    options: SetStateOptions = { ttl: this.config.defaultTTL }
+  ) {
     if (typeof window === 'undefined') {
       console.warn('LocalStateSync is disabled in Node.js')
       return
@@ -49,7 +71,10 @@ export class LocalStateSync<StateType> {
     if (this.#internalState.state !== 'loaded') {
       throw new Error('LocalStateSync is not ready')
     }
-    const encryptedState = await this.encryptState(state)
+    const encryptedState = await this.encryptState(
+      state,
+      options.ttl ?? this.config.defaultTTL
+    )
     window.localStorage.setItem(this.#internalState.storageKey, encryptedState)
   }
 
@@ -69,13 +94,19 @@ export class LocalStateSync<StateType> {
       console.warn('LocalStateSync is disabled in Node.js')
       return
     }
+    if (!('crypto' in window)) {
+      console.warn(
+        'LocalStateSync needs the WebCrypto API, your browser is not compatible.'
+      )
+      return
+    }
     const baseKey = base64UrlDecode(encodedEncryptionKey)
     if (baseKey.byteLength !== 32) {
       throw new Error(
         'LocalStateSync: encryptionKey must be 32 bytes (48 base64url characters)'
       )
     }
-    const namespace = new TextEncoder().encode(this.config.namespace)
+    const namespace = this.encoder.encode(this.config.namespace)
     const keyBuffer = await hash(concat(baseKey, namespace))
     const encryptionKey = await window.crypto.subtle.importKey(
       'raw',
@@ -129,37 +160,54 @@ export class LocalStateSync<StateType> {
     if (this.#internalState.state !== 'loaded') {
       throw new Error('LocalStateSync is not ready')
     }
-    const [iv, ciphertext] = storageValue.split('.')
+    const [iv, ciphertext, expirationTimeB64] = storageValue.split('.')
+    const expirationTime = expirationTimeB64
+      ? base64UrlDecode(expirationTimeB64)
+      : undefined
+
     const cleartext = await window.crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: base64UrlDecode(iv)
+        iv: base64UrlDecode(iv),
+        additionalData: expirationTime
       },
       this.#internalState.encryptionKey,
       base64UrlDecode(ciphertext)
     )
-    const serializedState = new TextDecoder().decode(cleartext)
+    if (
+      expirationTime &&
+      parseInt(this.decoder.decode(expirationTime)) < Date.now()
+    ) {
+      throw new Error('Persisted state expired')
+    }
+    const serializedState = this.decoder.decode(cleartext)
     return this.config.stateParser(serializedState)
   }
 
-  private async encryptState(state: StateType) {
+  private async encryptState(state: StateType, ttl: number) {
     if (this.#internalState.state !== 'loaded') {
       throw new Error('LocalStateSync is not ready')
     }
+    const expirationTime =
+      ttl <= 0 ? undefined : this.encoder.encode((Date.now() + ttl).toFixed())
     const serializedState = this.config.stateSerializer(state)
     const iv = window.crypto.getRandomValues(new Uint8Array(12))
     const ciphertext = await window.crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
-        iv
+        iv,
+        additionalData: expirationTime
       },
       this.#internalState.encryptionKey,
-      new TextEncoder().encode(serializedState)
+      this.encoder.encode(serializedState)
     )
     return [
       base64UrlEncode(iv),
-      base64UrlEncode(new Uint8Array(ciphertext))
-    ].join('.')
+      base64UrlEncode(new Uint8Array(ciphertext)),
+      expirationTime ? base64UrlEncode(expirationTime) : null
+    ]
+      .filter(Boolean)
+      .join('.')
   }
 }
 
