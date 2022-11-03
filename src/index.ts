@@ -178,6 +178,7 @@ export class LocalStateSync<StateType> {
       expirationTime &&
       parseInt(this.decoder.decode(expirationTime)) < Date.now()
     ) {
+      this.clearState()
       throw new Error('Persisted state expired')
     }
     const serializedState = this.decoder.decode(cleartext)
