@@ -161,22 +161,21 @@ export class LocalStateSync<StateType> {
       throw new Error('LocalStateSync is not ready')
     }
     const [iv, ciphertext, expirationTimeB64] = storageValue.split('.')
-    const expirationTime = expirationTimeB64
-      ? base64UrlDecode(expirationTimeB64)
-      : undefined
-
+    const aesGcmParams: AesGcmParams = {
+      name: 'AES-GCM',
+      iv: base64UrlDecode(iv)
+    }
+    if (expirationTimeB64) {
+      aesGcmParams.additionalData = base64UrlDecode(expirationTimeB64)
+    }
     const cleartext = await window.crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: base64UrlDecode(iv),
-        additionalData: expirationTime
-      },
+      aesGcmParams,
       this.#internalState.encryptionKey,
       base64UrlDecode(ciphertext)
     )
     if (
-      expirationTime &&
-      parseInt(this.decoder.decode(expirationTime)) < Date.now()
+      aesGcmParams.additionalData &&
+      parseInt(this.decoder.decode(aesGcmParams.additionalData)) < Date.now()
     ) {
       this.clearState()
       throw new Error('Persisted state expired')
@@ -189,23 +188,28 @@ export class LocalStateSync<StateType> {
     if (this.#internalState.state !== 'loaded') {
       throw new Error('LocalStateSync is not ready')
     }
-    const expirationTime =
-      ttl <= 0 ? undefined : this.encoder.encode((Date.now() + ttl).toFixed())
     const serializedState = this.config.stateSerializer(state)
     const iv = window.crypto.getRandomValues(new Uint8Array(12))
+    const aesGcmParams: AesGcmParams = {
+      name: 'AES-GCM',
+      iv
+    }
+    if (ttl > 0) {
+      aesGcmParams.additionalData = this.encoder.encode(
+        (Date.now() + ttl).toFixed()
+      )
+    }
     const ciphertext = await window.crypto.subtle.encrypt(
-      {
-        name: 'AES-GCM',
-        iv,
-        additionalData: expirationTime
-      },
+      aesGcmParams,
       this.#internalState.encryptionKey,
       this.encoder.encode(serializedState)
     )
     return [
       base64UrlEncode(iv),
       base64UrlEncode(new Uint8Array(ciphertext)),
-      expirationTime ? base64UrlEncode(expirationTime) : null
+      aesGcmParams.additionalData
+        ? base64UrlEncode(aesGcmParams.additionalData as any)
+        : null
     ]
       .filter(Boolean)
       .join('.')
