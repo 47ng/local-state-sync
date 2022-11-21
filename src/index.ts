@@ -22,6 +22,7 @@ type IdleInternalState = {
 }
 type LoadedInternalState = {
   state: 'loaded'
+  instanceID: string
   storageKey: string
   encryptionKey: CryptoKey
 }
@@ -76,6 +77,16 @@ export class LocalStateSync<StateType> {
       options.ttl ?? this.config.defaultTTL
     )
     window.localStorage.setItem(this.#internalState.storageKey, encryptedState)
+    // Notify other instances running on the same document
+    const storageEvent = new StorageEvent('storage', {
+      key: [
+        this.#internalState.storageKey,
+        'local',
+        this.#internalState.instanceID
+      ].join(':'),
+      newValue: encryptedState
+    })
+    window.dispatchEvent(storageEvent)
   }
 
   public clearState() {
@@ -100,6 +111,7 @@ export class LocalStateSync<StateType> {
       )
       return
     }
+    const instanceID = window.crypto.randomUUID()
     const baseKey = base64UrlDecode(encodedEncryptionKey)
     if (baseKey.byteLength !== 32) {
       throw new Error(
@@ -121,6 +133,7 @@ export class LocalStateSync<StateType> {
     const storageKey = base64UrlEncode(await hash(keyBuffer))
     this.#internalState = {
       state: 'loaded',
+      instanceID,
       storageKey,
       encryptionKey
     }
@@ -145,8 +158,18 @@ export class LocalStateSync<StateType> {
     if (this.#internalState.state !== 'loaded') {
       return // Not ready
     }
-    if (event.key !== this.#internalState.storageKey || !event.newValue) {
+    if (!event.newValue || !event.key) {
       return
+    }
+    const [storageKey, local, emitterID] = event.key.split(':')
+    if (storageKey !== this.#internalState.storageKey) {
+      return
+    }
+    if (local !== undefined && local !== 'local') {
+      return // Invalid cross-document vs local specifier
+    }
+    if (emitterID === this.#internalState.instanceID) {
+      return // Ignore our own messages
     }
     try {
       const state = await this.decryptState(event.newValue)
